@@ -1,4 +1,4 @@
-// src/App.jsx
+// src/App.jsx  
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx'
 import Login    from './pages/Login'
 import StaffApp from './pages/StaffApp'
