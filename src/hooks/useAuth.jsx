@@ -1,82 +1,68 @@
 // src/hooks/useAuth.js
-import { createContext, useContext, useEffect, useState } from 'react'
-import {
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  signOut,
-} from 'firebase/auth'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { useState, useEffect } from 'react'
+import { onAuthStateChanged } from 'firebase/auth'
+import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 
-const AuthContext = createContext(null)
-
-export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(null)
-  const [role, setRole]       = useState(null) // 'admin' | 'staff' | null
-  const [staffDoc, setStaffDoc] = useState(null)
-  const [loading, setLoading] = useState(true)
+export function useAuth() {
+  const [user,      setUser]      = useState(undefined) // undefined = loading
+  const [isAdmin,   setIsAdmin]   = useState(false)
+  const [staffData, setStaffData] = useState(null) // for PIN-logged-in staff
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async u => {
-      if (!u) { setUser(null); setRole(null); setStaffDoc(null); setLoading(false); return }
-      setUser(u)
-      // Check admin
-      const adminSnap = await getDoc(doc(db, 'admins', u.uid))
-      if (adminSnap.exists()) { setRole('admin'); setLoading(false); return }
-      // Check staff
-      const staffSnap = await getDoc(doc(db, 'staff', u.uid))
-      if (staffSnap.exists()) {
-        setRole('staff'); setStaffDoc({ id: u.uid, ...staffSnap.data() })
-      } else {
-        // New phone user — create minimal staff doc
-        const newStaff = { name: u.displayName || u.phoneNumber, phone: u.phoneNumber, active: true, createdAt: new Date().toISOString() }
-        await setDoc(doc(db, 'staff', u.uid), newStaff)
-        setRole('staff'); setStaffDoc({ id: u.uid, ...newStaff })
+    // Check for PIN-based staff session in sessionStorage
+    const stored = sessionStorage.getItem('kal_staff_session')
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored)
+        setStaffData(parsed)
+        setUser({ uid: parsed.uid, isAnonymous: true })
+        setIsAdmin(false)
+        return
+      } catch {}
+    }
+
+    const unsub = onAuthStateChanged(auth, async firebaseUser => {
+      if (!firebaseUser) {
+        setUser(null); setIsAdmin(false); setStaffData(null)
+        return
       }
-      setLoading(false)
+
+      // Check if anonymous (PIN staff login via signInAnonymously)
+      if (firebaseUser.isAnonymous) {
+        // Already handled by sessionStorage above
+        setUser(firebaseUser)
+        return
+      }
+
+      // Google login — check if admin
+      setUser(firebaseUser)
+      try {
+        const adminSnap = await getDoc(doc(db, 'admins', firebaseUser.uid))
+        setIsAdmin(adminSnap.exists())
+        setStaffData(null)
+      } catch {
+        setIsAdmin(false)
+      }
     })
+
     return unsub
   }, [])
 
-  // Google sign-in (admin)
-  const loginGoogle = async () => {
-    const provider = new GoogleAuthProvider()
-    await signInWithPopup(auth, provider)
+  const setStaffSession = (data) => {
+    sessionStorage.setItem('kal_staff_session', JSON.stringify(data))
+    setStaffData(data)
+    setUser({ uid: data.uid, isAnonymous: true })
+    setIsAdmin(false)
   }
 
-  // Phone OTP — step 1: send OTP
-  const sendOtp = async (phoneNumber, recaptchaContainerId) => {
-    if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, recaptchaContainerId, {
-        size: 'invisible',
-        callback: () => {},
-      })
-    }
-    const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, window.recaptchaVerifier)
-    window.confirmationResult = confirmationResult
-    return confirmationResult
+  const logout = async () => {
+    sessionStorage.removeItem('kal_staff_session')
+    setStaffData(null)
+    setUser(null)
+    setIsAdmin(false)
+    try { await auth.signOut() } catch {}
   }
 
-  // Phone OTP — step 2: verify
-  const verifyOtp = async otp => {
-    if (!window.confirmationResult) throw new Error('No OTP sent')
-    return window.confirmationResult.confirm(otp)
-  }
-
-  const logout = () => {
-    window.recaptchaVerifier = null
-    window.confirmationResult = null
-    return signOut(auth)
-  }
-
-  return (
-    <AuthContext.Provider value={{ user, role, staffDoc, loading, loginGoogle, sendOtp, verifyOtp, logout }}>
-      {children}
-    </AuthContext.Provider>
-  )
+  return { user, isAdmin, staffData, logout, setStaffSession }
 }
-
-export const useAuth = () => useContext(AuthContext)
