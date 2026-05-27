@@ -1,4 +1,4 @@
-// src/pages/Login.jsx
+// src/pages/Login.jsx 
 import { useState } from 'react'
 import { signInWithPopup, GoogleAuthProvider, signInAnonymously } from 'firebase/auth'
 import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore'
